@@ -9,12 +9,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# Команда Command также может отсутствовать в некоторых сборках.
-# Если она есть, импортируем так:
+# Если есть в вашей версии aiogram
 from aiogram.filters.command import Command
-# Если нет - тогда можно заменить на F.text.startswith("/") или что-то подобное.
+# Если нет - тогда можно заменить @dp.message(F.text.startswith("/start")).
 
-# Важно: DefaultBotProperties для установки parse_mode по умолчанию
 from aiogram.client.bot import DefaultBotProperties
 
 from config import Config
@@ -67,21 +65,33 @@ class PromoCodeForm(StatesGroup):
 
 
 def get_user_keyboard():
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(
-        KeyboardButton("📄 Оформить через Промокод"),
-        KeyboardButton("✉️ Отправить Заявку Администратору")
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton("📄 Оформить через Промокод"),
+                KeyboardButton("✉️ Отправить Заявку Администратору")
+            ],
+            [
+                KeyboardButton("📊 Статус Подписки")
+            ]
+        ],
+        resize_keyboard=True
     )
-    keyboard.add(KeyboardButton("📊 Статус Подписки"))
     return keyboard
 
 def get_admin_keyboard():
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(
-        KeyboardButton("🔍 Просмотреть Заявки"),
-        KeyboardButton("💬 Ответить на Заявку")
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton("🔍 Просмотреть Заявки"),
+                KeyboardButton("💬 Ответить на Заявку")
+            ],
+            [
+                KeyboardButton("⬅️ Назад")
+            ]
+        ],
+        resize_keyboard=True
     )
-    keyboard.add(KeyboardButton("⬅️ Назад"))
     return keyboard
 
 def is_admin(user_id: int) -> bool:
