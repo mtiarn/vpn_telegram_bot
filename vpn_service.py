@@ -1,4 +1,4 @@
-# vpn_service.py
+ # vpn_service.py
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -6,13 +6,17 @@ from typing import Optional
 
 from py3xui import AsyncApi, Client
 
+# Для aiogram 3.x импорт Bot по-прежнему доступен так:
+from aiogram import Bot
+
 from config import Config
 from json_utils import JSONDataStore
-from promocode import PromocodeService, Promocode
+from promocode import PromocodeService
 from request_service import RequestService, Request
-from client import ClientData  # Предполагается, что этот файл содержит класс ClientData
+from client import ClientData
 
 logger = logging.getLogger(__name__)
+
 
 class User:
     """
@@ -32,6 +36,7 @@ class User:
     def from_dict(data: dict):
         return User(user_id=data["user_id"], vpn_id=data["vpn_id"])
 
+
 class VPNService:
     """
     Сервис для управления операциями клиентов VPN, включая создание, обновление и
@@ -45,7 +50,8 @@ class VPNService:
         requests_store: JSONDataStore,
         config: Config,
         promocode_service: PromocodeService,
-        request_service: RequestService
+        request_service: RequestService,
+        bot: Bot  # Объект Bot из aiogram 3.x
     ) -> None:
         self.users_store = users_store
         self.promocodes_store = promocodes_store
@@ -62,6 +68,7 @@ class VPNService:
         self.promocode_service = promocode_service
         self.request_service = request_service
         self.inbound_id = config.xui.INBOUND_ID  # Единственный inbound ID
+        self.bot = bot  # Сохраняем объект бота для отправки сообщений
         logger.info("VPNService initialized.")
 
     async def initialize(self) -> None:
@@ -139,7 +146,6 @@ class VPNService:
                 logger.debug(f"No client data found for user {user_id}.")
                 return None
 
-            # Поскольку у вас только один inbound, лимит IP фиксирован
             limit_ip = client.limit_ip
             max_devices = -1 if limit_ip == 0 else limit_ip
             traffic_total = client.total
@@ -179,14 +185,6 @@ class VPNService:
     ) -> bool:
         """
         Создаёт нового клиента VPN через API 3x-ui.
-
-        :param user: Объект User.
-        :param devices: Количество устройств.
-        :param duration: Длительность в днях.
-        :param enable: Включен ли клиент.
-        :param flow: Протокол.
-        :param total_gb: Общий трафик в ГБ.
-        :return: True если успешно, иначе False.
         """
         logger.info(f"Creating client for user {user.user_id} with {devices} devices for {duration} days.")
         new_client = Client(
@@ -220,16 +218,6 @@ class VPNService:
     ) -> bool:
         """
         Обновляет существующего клиента VPN через API 3x-ui.
-
-        :param user: Объект User.
-        :param devices: Количество устройств.
-        :param duration: Длительность в днях.
-        :param replace_devices: Заменить количество устройств.
-        :param replace_duration: Заменить длительность.
-        :param enable: Включен ли клиент.
-        :param flow: Протокол.
-        :param total_gb: Общий трафик в ГБ.
-        :return: True если успешно, иначе False.
         """
         logger.info(f"Updating client for user {user.user_id} with {devices} devices for {duration} days.")
         try:
@@ -251,7 +239,6 @@ class VPNService:
 
             expiry_time = self._add_days_to_timestamp(expiry_time_to_use, duration)
 
-            # Обновляем поля клиента
             client.enable = enable
             client.expiry_time = expiry_time
             client.flow = flow
@@ -269,26 +256,18 @@ class VPNService:
     async def create_subscription(self, user_id: int, devices: int, duration: int) -> bool:
         """
         Создаёт новую подписку для пользователя. Если пользователь уже существует, обновляет её.
-
-        :param user_id: ID пользователя.
-        :param devices: Количество устройств.
-        :param duration: Длительность в днях.
-        :return: True если успешно, иначе False.
         """
         user = await self.get_user(user_id)
         if not user:
-            # Если пользователя нет, создаём нового
             user = User(user_id=user_id, vpn_id=f"vpn_{user_id}")
             await self.save_user(user)
             logger.debug(f"User {user_id} created and saved to users.json.")
 
         client_exists = await self.is_client_exists(user.user_id)
         if not client_exists:
-            # Создаём нового клиента
             success = await self.create_client(user, devices, duration)
             return success
         else:
-            # Обновляем существующего клиента
             success = await self.update_client(
                 user,
                 devices,
@@ -301,11 +280,6 @@ class VPNService:
     async def extend_subscription(self, user_id: int, devices: int, duration: int) -> bool:
         """
         Продлевает подписку для существующего пользователя.
-
-        :param user_id: ID пользователя.
-        :param devices: Количество устройств.
-        :param duration: Длительность в днях.
-        :return: True если успешно, иначе False.
         """
         user = await self.get_user(user_id)
         if not user:
@@ -316,17 +290,13 @@ class VPNService:
             devices,
             duration,
             replace_devices=True,
-            replace_duration=False,  # Продление без замены длительности
+            replace_duration=False,  # Продлеваем без замены всей длительности
         )
         return success
 
     async def apply_promocode(self, user_id: int, promocode_code: str) -> bool:
         """
         Применяет промокод для пользователя, продлевая его подписку.
-
-        :param user_id: ID пользователя.
-        :param promocode_code: Код промокода.
-        :return: True если успешно, иначе False.
         """
         promocode = await self.promocode_service.get_promocode(promocode_code)
         if not promocode:
@@ -335,13 +305,12 @@ class VPNService:
 
         user = await self.get_user(user_id)
         if not user:
-            # Создаём нового пользователя, если его нет
             user = User(user_id=user_id, vpn_id=f"vpn_{user_id}")
             await self.save_user(user)
             logger.debug(f"User {user_id} created and saved to users.json.")
 
         if await self.is_client_exists(user_id):
-            # Продлеваем существующую подписку без изменения количества устройств
+            # Продлеваем существующую подписку
             success = await self.update_client(
                 user,
                 devices=0,  # Не изменяем количество устройств
@@ -354,10 +323,10 @@ class VPNService:
                 logger.info(f"Promocode {promocode_code} применён для пользователя {user_id}.")
                 return True
         else:
-            # Создаём нового клиента с количеством устройств по умолчанию
+            # Создаём нового клиента с 1 устройством (пример)
             success = await self.create_client(
                 user,
-                devices=1,  # По умолчанию 1 устройство при использовании промокода
+                devices=1,
                 duration=promocode.duration_days,
             )
             if success:
@@ -365,17 +334,12 @@ class VPNService:
                 logger.info(f"Promocode {promocode_code} применён для нового пользователя {user_id}.")
                 return True
 
-        # Если что-то пошло не так, возвращаем False
         logger.warning(f"Не удалось применить промокод {promocode_code} для пользователя {user_id}.")
         return False
 
     async def handle_user_request(self, user_id: int, details: dict) -> bool:
         """
         Обрабатывает заявку пользователя на оформление подписки через администратора.
-
-        :param user_id: ID пользователя.
-        :param details: Детали заявки.
-        :return: True если успешно, иначе False.
         """
         try:
             request = Request(
@@ -394,10 +358,6 @@ class VPNService:
     async def respond_to_request(self, request_id: str, message: str) -> bool:
         """
         Отправляет ответ пользователю по поводу его заявки и обновляет статус заявки.
-
-        :param request_id: ID заявки.
-        :param message: Сообщение для пользователя.
-        :return: True если успешно, иначе False.
         """
         try:
             request = await self.request_service.get_request(request_id)
@@ -406,10 +366,10 @@ class VPNService:
                 return False
 
             user_id = request.user_id
-            # Отправляем сообщение пользователю через Telegram-бота
-            await self.send_message_to_user(user_id, message)
+            success = await self.send_message_to_user(user_id, message)
+            if not success:
+                return False
 
-            # Обновляем статус заявки
             await self.request_service.update_request_status(request_id, "completed")
             logger.info(f"Заявка {request_id} обработана и пользователь {user_id} уведомлён.")
             return True
@@ -419,15 +379,15 @@ class VPNService:
 
     async def send_message_to_user(self, user_id: int, message: str) -> bool:
         """
-        Отправляет сообщение пользователю через Telegram-бота.
-
-        :param user_id: ID пользователя.
-        :param message: Сообщение для отправки.
-        :return: True если успешно, иначе False.
+        Отправляет сообщение пользователю через Telegram-бота (aiogram 3.x).
         """
         try:
-            from bot_vpn_manager import bot  # Импортируем бот из основного файла
-            await bot.send_message(chat_id=user_id, text=message)
+            # В aiogram 3.x метод send_message работает так же, parse_mode поддерживается
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode="Markdown"  # при необходимости можете заменить на "MarkdownV2" или "HTML"
+            )
             logger.info(f"Сообщение пользователю {user_id} успешно отправлено.")
             return True
         except Exception as e:
@@ -437,18 +397,12 @@ class VPNService:
     def _current_timestamp(self) -> int:
         """
         Возвращает текущий временной штамп в миллисекундах.
-
-        :return: Временной штамп.
         """
         return int(datetime.now(timezone.utc).timestamp() * 1000)
 
     def _add_days_to_timestamp(self, timestamp: int, days: int) -> int:
         """
-        Добавляет дни к временном штампу.
-
-        :param timestamp: Исходный временной штамп.
-        :param days: Количество дней.
-        :return: Обновлённый временной штамп.
+        Добавляет дни к временному штампу.
         """
         current_datetime = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
         new_datetime = current_datetime + timedelta(days=days)
@@ -457,9 +411,6 @@ class VPNService:
     def _days_to_timestamp(self, days: int) -> int:
         """
         Конвертирует дни в временной штамп.
-
-        :param days: Количество дней.
-        :return: Временной штамп.
         """
         current_time = self._current_timestamp()
         return self._add_days_to_timestamp(current_time, days)
