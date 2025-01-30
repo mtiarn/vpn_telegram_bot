@@ -1,4 +1,3 @@
-# bot_vpn_manager.py
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -10,8 +9,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# Фильтры из aiogram 3.x
-from aiogram.filters import Command, Text
+# Команда Command также может отсутствовать в некоторых сборках.
+# Если она есть, импортируем так:
+from aiogram.filters.command import Command
+# Если нет - тогда можно заменить на F.text.startswith("/") или что-то подобное.
+
 # Важно: DefaultBotProperties для установки parse_mode по умолчанию
 from aiogram.client.bot import DefaultBotProperties
 
@@ -21,17 +23,14 @@ from promocode import PromocodeService
 from request_service import RequestService, Request
 from json_utils import JSONDataStore
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Загрузка конфигурации
 config = Config()
 
-# Инициализация бота (aiogram 3.x)
 bot = Bot(
     token=config.TELEGRAM_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
@@ -39,12 +38,10 @@ bot = Bot(
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Инициализация хранилищ данных
 users_store = JSONDataStore(config.USERS_FILE)
 promocodes_store = JSONDataStore(config.PROMOCODES_FILE)
 requests_store = JSONDataStore(config.REQUESTS_FILE)
 
-# Инициализация сервисов
 promocode_service = PromocodeService(promocodes_store)
 request_service = RequestService(requests_store)
 vpn_service = VPNService(
@@ -54,10 +51,9 @@ vpn_service = VPNService(
     config=config,
     promocode_service=promocode_service,
     request_service=request_service,
-    bot=bot  # Передача объекта бота для отправки сообщений
+    bot=bot
 )
 
-# ====================== Состояния ======================
 
 class SendRequestForm(StatesGroup):
     waiting_for_details = State()
@@ -66,11 +62,9 @@ class RespondRequest(StatesGroup):
     waiting_for_request_id = State()
     waiting_for_response_message = State()
 
-# Состояние для ввода промокода (чтобы не использовать register(...) вручную)
 class PromoCodeForm(StatesGroup):
     waiting_for_promo = State()
 
-# ====================== Клавиатуры ======================
 
 def get_user_keyboard():
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -90,14 +84,10 @@ def get_admin_keyboard():
     keyboard.add(KeyboardButton("⬅️ Назад"))
     return keyboard
 
-# ====================== Утилита для проверки админа ======================
-
 def is_admin(user_id: int) -> bool:
     return user_id in config.BOT_ADMINS
 
-# ====================== Хендлеры ======================
-
-# Обработчик команды /start (3.x: @dp.message(Command("start")))
+# -- Хендлер на /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -112,19 +102,15 @@ async def cmd_start(message: types.Message):
             reply_markup=get_user_keyboard()
         )
 
-# Обработчик нажатия "📄 Оформить через Промокод"
-# Вместо lambda message: message.text == "..." используем @dp.message(Text("..."))
-@dp.message(Text("📄 Оформить через Промокод"))
+# -- Хендлер нажатия "📄 Оформить через Промокод"
+@dp.message(F.text == "📄 Оформить через Промокод")
 async def cmd_subscribe_promo(message: types.Message, state: FSMContext):
-    # Запрашиваем у пользователя промокод
     await message.answer(
         "📩 Пожалуйста, введите ваш промокод:",
         reply_markup=ReplyKeyboardRemove()
     )
-    # Переводим в состояние ввода промокода
     await state.set_state(PromoCodeForm.waiting_for_promo)
 
-# Обработчик ввода промокода (состояние PromoCodeForm.waiting_for_promo)
 @dp.message(PromoCodeForm.waiting_for_promo)
 async def process_promo_code(message: types.Message, state: FSMContext):
     promo_code = message.text.strip()
@@ -142,12 +128,10 @@ async def process_promo_code(message: types.Message, state: FSMContext):
             "или выберите другой способ оформления подписки.",
             reply_markup=get_user_keyboard()
         )
-
-    # Очистим состояние
     await state.clear()
 
-# Обработчик кнопки "✉️ Отправить Заявку Администратору"
-@dp.message(Text("✉️ Отправить Заявку Администратору"))
+# -- Хендлер кнопки "✉️ Отправить Заявку Администратору"
+@dp.message(F.text == "✉️ Отправить Заявку Администратору")
 async def cmd_send_request(message: types.Message, state: FSMContext):
     await SendRequestForm.waiting_for_details.set()
     await message.answer(
@@ -156,7 +140,6 @@ async def cmd_send_request(message: types.Message, state: FSMContext):
         reply_markup=ReplyKeyboardRemove()
     )
 
-# Обработчик деталей заявки (состояние SendRequestForm.waiting_for_details)
 @dp.message(SendRequestForm.waiting_for_details, F.text)
 async def process_request_details(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -180,7 +163,6 @@ async def process_request_details(message: types.Message, state: FSMContext):
         )
         logger.info(f"Новая заявка {request_id} от пользователя {user_id} создана.")
 
-        # Уведомляем администраторов
         for admin_id in config.BOT_ADMINS:
             try:
                 await bot.send_message(
@@ -195,11 +177,10 @@ async def process_request_details(message: types.Message, state: FSMContext):
             "❌ Произошла ошибка при отправке заявки. Пожалуйста, попробуйте позже.",
             reply_markup=get_user_keyboard()
         )
-
     await state.clear()
 
-# Обработчик кнопки "📊 Статус Подписки"
-@dp.message(Text("📊 Статус Подписки"))
+# -- Хендлер "📊 Статус Подписки"
+@dp.message(F.text == "📊 Статус Подписки")
 async def cmd_status(message: types.Message):
     user_id = message.from_user.id
     client_data = await vpn_service.get_client_data(user_id)
@@ -225,8 +206,8 @@ async def cmd_status(message: types.Message):
             reply_markup=get_user_keyboard()
         )
 
-# Обработчик кнопки "🔍 Просмотреть Заявки" (только для админов)
-@dp.message(Text("🔍 Просмотреть Заявки"))
+# -- Хендлер "🔍 Просмотреть Заявки"
+@dp.message(F.text == "🔍 Просмотреть Заявки")
 async def cmd_view_requests(message: types.Message):
     user_id = message.from_user.id
     if not is_admin(user_id):
@@ -253,8 +234,8 @@ async def cmd_view_requests(message: types.Message):
 
     await message.answer(response, reply_markup=get_admin_keyboard())
 
-# Обработчик кнопки "💬 Ответить на Заявку" (только для админов)
-@dp.message(Text("💬 Ответить на Заявку"))
+# -- Хендлер "💬 Ответить на Заявку"
+@dp.message(F.text == "💬 Ответить на Заявку")
 async def cmd_respond_request(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     if not is_admin(user_id):
@@ -281,7 +262,7 @@ async def process_request_id(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(request_id=request_id)
-    await RespondRequest.next()  # Переходим к waiting_for_response_message
+    await RespondRequest.next()
     await message.answer(
         "💬 Пожалуйста, введите сообщение для пользователя:",
         reply_markup=ReplyKeyboardRemove()
@@ -304,11 +285,10 @@ async def process_response_message(message: types.Message, state: FSMContext):
             "❌ Произошла ошибка при отправке сообщения пользователю или обновлении заявки.",
             reply_markup=get_admin_keyboard()
         )
-
     await state.clear()
 
-# Обработчик кнопки "⬅️ Назад"
-@dp.message(Text("⬅️ Назад"))
+# -- Хендлер "⬅️ Назад"
+@dp.message(F.text == "⬅️ Назад")
 async def cmd_back_to_admin(message: types.Message):
     user_id = message.from_user.id
     if is_admin(user_id):
@@ -322,15 +302,10 @@ async def cmd_back_to_admin(message: types.Message):
             reply_markup=get_user_keyboard()
         )
 
-# ====================== Запуск бота ======================
-
 async def main():
-    # Инициализация сервиса VPN (логин в 3x-ui)
     await vpn_service.initialize()
-
     try:
         logger.info("Бот запущен и готов к работе.")
-        # В aiogram 3.x запускаем диспетчер и передаём бота
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
